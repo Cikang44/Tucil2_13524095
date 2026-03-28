@@ -9,21 +9,24 @@ import (
 )
 
 func main() {
-	fmt.Print("Enter an .obj file path: ")
+	fmt.Print("Enter an .obj file path (without folder): ")
 	var path string
 	fmt.Scanln(&path)
+	fullPath := "../data/" + path
+	fmt.Printf("Reading %s\n", fullPath)
 
 	fmt.Print("Enter depth: ")
 	maxDepth := 5
 	_, _ = fmt.Scanln(&maxDepth)
 	now := time.Now()
 
-	obj := readObjFile(path)
+	obj := readObjFile(fullPath)
 	fmt.Printf("Loaded Vertices: %d\n", len(obj.Vertices))
 	fmt.Printf("Loaded Faces: %d\n", len(obj.Faces))
 
 	octree := BuildOctreeFromObj(obj, maxDepth)
-	outputPath := path[:len(path)-len(filepath.Ext(path))] + "_res.obj"
+	fileName := filepath.Base(fullPath)
+	outputPath := "../test/" + fileName[:len(fileName)-len(filepath.Ext(fileName))] + "_res.obj"
 	stats, err := octree.WriteOccupiedVoxelsObj(outputPath)
 	if err != nil {
 		fmt.Printf("Failed to write result: %v\n", err)
