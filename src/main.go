@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"time"
+
+	"github.com/fogleman/meshview"
 )
 
 func main() {
@@ -43,4 +45,5 @@ func main() {
 
 	fmt.Printf("Result written to: %s\n", outputPath)
 	fmt.Printf("Time: %v\n", time.Since(now))
+	meshview.Run(outputPath)
 }
