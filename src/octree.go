@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sync"
 )
 
 const (
@@ -26,6 +27,9 @@ type OctreeNode struct {
 
 	created []int
 	skipped []int
+
+	mu       sync.Mutex
+	splitOnce sync.Once
 }
 
 type ObjExportStats struct {
@@ -78,17 +82,22 @@ func (n *OctreeNode) childCenter(index int) Vector3f {
 }
 
 func (n *OctreeNode) split() {
-	if !n.IsLeaf {
-		return
-	}
+	n.splitOnce.Do(func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
 
-	n.IsLeaf = false
-	childSize := n.size / 2
+		if !n.IsLeaf {
+			return
+		}
 
-	for i := range 8 {
-		center := n.childCenter(i)
-		n.Children[i] = NewOctreeNode(center.X, center.Y, center.Z, n.depth+1, n.maxDepth, childSize, n.root)
-	}
+		n.IsLeaf = false
+		childSize := n.size / 2
+
+		for i := range 8 {
+			center := n.childCenter(i)
+			n.Children[i] = NewOctreeNode(center.X, center.Y, center.Z, n.depth+1, n.maxDepth, childSize, n.root)
+		}
+	})
 }
 
 func (n *OctreeNode) InsertFace(face [3]Vector3f) {
@@ -96,15 +105,22 @@ func (n *OctreeNode) InsertFace(face [3]Vector3f) {
 	if root == nil {
 		root = n
 	}
+
+	n.mu.Lock()
 	root.created[n.depth]++
+	n.mu.Unlock()
 
 	if !IsFaceOverlapWithVoxel(n.Position, n.size, face) {
+		n.mu.Lock()
 		root.skipped[n.depth]++
+		n.mu.Unlock()
 		return
 	}
 
 	if n.depth == n.maxDepth {
+		n.mu.Lock()
 		n.Occupied = true
+		n.mu.Unlock()
 		return
 	}
 
@@ -309,6 +325,7 @@ func BuildOctreeFromObj(obj Obj, maxDepth int) *OctreeNode {
 	root.created = make([]int, maxDepth+1)
 	root.skipped = make([]int, maxDepth+1)
 
+	validFaces := make([][3]Vector3f, 0, len(obj.Faces))
 	for _, f := range obj.Faces {
 		i0 := f[0] - 1
 		i1 := f[1] - 1
@@ -322,8 +339,28 @@ func BuildOctreeFromObj(obj Obj, maxDepth int) *OctreeNode {
 		}
 
 		face := [3]Vector3f{obj.Vertices[i0], obj.Vertices[i1], obj.Vertices[i2]}
-		root.InsertFace(face)
+		validFaces = append(validFaces, face)
 	}
+
+	workerCount := 8
+	faceChan := make(chan [3]Vector3f, workerCount)
+	var wg sync.WaitGroup
+
+	for w := 0; w < workerCount; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for face := range faceChan {
+				root.InsertFace(face)
+			}
+		}()
+	}
+
+	for _, face := range validFaces {
+		faceChan <- face
+	}
+	close(faceChan)
+	wg.Wait()
 
 	return root
 }
