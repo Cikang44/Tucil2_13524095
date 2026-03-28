@@ -31,6 +31,12 @@ type ObjExportStats struct {
 	Faces    int
 }
 
+type voxelKey struct {
+	X int
+	Y int
+	Z int
+}
+
 func NewOctreeNode(x, y, z float64, depth, maxDepth int, size float64, root *OctreeNode) *OctreeNode {
 	return &OctreeNode{
 		Position: Vector3f{X: x, Y: y, Z: z},
@@ -98,11 +104,60 @@ func (n *OctreeNode) InsertFace(face [3]Vector3f) {
 	}
 }
 
-func writeVoxelCubeObj(w *bufio.Writer, center Vector3f, size float64, vertexOffset int, stats *ObjExportStats) error {
+func voxelKeyFromCenter(center, minCorner Vector3f, step float64) voxelKey {
+	fx := math.Floor((center.X-minCorner.X)/step + 1e-9)
+	fy := math.Floor((center.Y-minCorner.Y)/step + 1e-9)
+	fz := math.Floor((center.Z-minCorner.Z)/step + 1e-9)
+
+	return voxelKey{X: int(fx), Y: int(fy), Z: int(fz)}
+}
+
+func (n *OctreeNode) collectOccupiedVoxelKeys(occupied map[voxelKey]struct{}, minCorner Vector3f, step float64) {
+	if n.IsLeaf {
+		if n.Occupied {
+			occupied[voxelKeyFromCenter(n.Position, minCorner, step)] = struct{}{}
+		}
+		return
+	}
+
+	for _, child := range n.Children {
+		if child != nil {
+			child.collectOccupiedVoxelKeys(occupied, minCorner, step)
+		}
+	}
+}
+
+func writeVoxelCubeObj(w *bufio.Writer, center Vector3f, size float64, vertexOffset int, stats *ObjExportStats, key voxelKey, occupied map[voxelKey]struct{}) (bool, error) {
 	half := size / 2
 	cx := center.X
 	cy := center.Y
 	cz := center.Z
+
+	faceDefs := []struct {
+		neighbor voxelKey
+		triA     [3]int
+		triB     [3]int
+	}{
+		{neighbor: voxelKey{X: 0, Y: 0, Z: -1}, triA: [3]int{1, 3, 2}, triB: [3]int{1, 4, 3}},
+		{neighbor: voxelKey{X: 0, Y: 0, Z: 1}, triA: [3]int{5, 6, 7}, triB: [3]int{5, 7, 8}},
+		{neighbor: voxelKey{X: 0, Y: -1, Z: 0}, triA: [3]int{1, 2, 6}, triB: [3]int{1, 6, 5}},
+		{neighbor: voxelKey{X: 0, Y: 1, Z: 0}, triA: [3]int{4, 7, 3}, triB: [3]int{4, 8, 7}},
+		{neighbor: voxelKey{X: -1, Y: 0, Z: 0}, triA: [3]int{1, 8, 4}, triB: [3]int{1, 5, 8}},
+		{neighbor: voxelKey{X: 1, Y: 0, Z: 0}, triA: [3]int{2, 3, 7}, triB: [3]int{2, 7, 6}},
+	}
+
+	visibleFaces := make([][2][3]int, 0, 6)
+	for _, def := range faceDefs {
+		neighbor := voxelKey{X: key.X + def.neighbor.X, Y: key.Y + def.neighbor.Y, Z: key.Z + def.neighbor.Z}
+		if _, exists := occupied[neighbor]; exists {
+			continue
+		}
+		visibleFaces = append(visibleFaces, [2][3]int{def.triA, def.triB})
+	}
+
+	if len(visibleFaces) == 0 {
+		return false, nil
+	}
 
 	verts := [8]Vector3f{
 		{X: cx - half, Y: cy - half, Z: cz - half},
@@ -117,45 +172,42 @@ func writeVoxelCubeObj(w *bufio.Writer, center Vector3f, size float64, vertexOff
 
 	for _, v := range verts {
 		if _, err := fmt.Fprintf(w, "v %.9f %.9f %.9f\n", v.X, v.Y, v.Z); err != nil {
-			return err
+			return false, err
 		}
 		stats.Vertices++
 	}
 
-	facePattern := [12][3]int{
-		{1, 2, 3}, {1, 3, 4},
-		{5, 8, 7}, {5, 7, 6},
-		{1, 5, 6}, {1, 6, 2},
-		{4, 3, 7}, {4, 7, 8},
-		{1, 4, 8}, {1, 8, 5},
-		{2, 6, 7}, {2, 7, 3},
-	}
-
-	for _, tri := range facePattern {
-		if _, err := fmt.Fprintf(w, "f %d %d %d\n", tri[0]+vertexOffset, tri[1]+vertexOffset, tri[2]+vertexOffset); err != nil {
-			return err
+	for _, face := range visibleFaces {
+		for _, tri := range face {
+			if _, err := fmt.Fprintf(w, "f %d %d %d\n", tri[0]+vertexOffset, tri[1]+vertexOffset, tri[2]+vertexOffset); err != nil {
+				return false, err
+			}
+			stats.Faces++
 		}
-		stats.Faces++
 	}
 
-	return nil
+	return true, nil
 }
 
-func (n *OctreeNode) writeOccupiedVoxelsObj(w *bufio.Writer, vertexOffset *int, stats *ObjExportStats) error {
+func (n *OctreeNode) writeOccupiedVoxelsObj(w *bufio.Writer, vertexOffset *int, stats *ObjExportStats, minCorner Vector3f, step float64, occupied map[voxelKey]struct{}) error {
 	if n.IsLeaf {
 		if n.Occupied {
-			if err := writeVoxelCubeObj(w, n.Position, n.size, *vertexOffset, stats); err != nil {
+			stats.Voxels++
+			key := voxelKeyFromCenter(n.Position, minCorner, step)
+			wrote, err := writeVoxelCubeObj(w, n.Position, n.size, *vertexOffset, stats, key, occupied)
+			if err != nil {
 				return err
 			}
-			*vertexOffset += 8
-			stats.Voxels++
+			if wrote {
+				*vertexOffset += 8
+			}
 		}
 		return nil
 	}
 
 	for _, child := range n.Children {
 		if child != nil {
-			if err := child.writeOccupiedVoxelsObj(w, vertexOffset, stats); err != nil {
+			if err := child.writeOccupiedVoxelsObj(w, vertexOffset, stats, minCorner, step, occupied); err != nil {
 				return err
 			}
 		}
@@ -172,10 +224,19 @@ func (n *OctreeNode) WriteOccupiedVoxelsObj(path string) (ObjExportStats, error)
 	defer file.Close()
 
 	w := bufio.NewWriter(file)
+	minCorner := Vector3f{
+		X: n.Position.X - n.size/2,
+		Y: n.Position.Y - n.size/2,
+		Z: n.Position.Z - n.size/2,
+	}
+	step := n.size / math.Pow(2, float64(n.maxDepth))
+
+	occupied := map[voxelKey]struct{}{}
+	n.collectOccupiedVoxelKeys(occupied, minCorner, step)
 
 	vertexOffset := 0
 	stats := ObjExportStats{}
-	if err := n.writeOccupiedVoxelsObj(w, &vertexOffset, &stats); err != nil {
+	if err := n.writeOccupiedVoxelsObj(w, &vertexOffset, &stats, minCorner, step, occupied); err != nil {
 		return ObjExportStats{}, err
 	}
 
