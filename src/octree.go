@@ -23,6 +23,9 @@ type OctreeNode struct {
 	depth    int
 	maxDepth int
 	root     *OctreeNode
+
+	created []int
+	skipped []int
 }
 
 type ObjExportStats struct {
@@ -89,7 +92,14 @@ func (n *OctreeNode) split() {
 }
 
 func (n *OctreeNode) InsertFace(face [3]Vector3f) {
+	root := n.root
+	if root == nil {
+		root = n
+	}
+	root.created[n.depth]++
+
 	if !IsFaceOverlapWithVoxel(n.Position, n.size, face) {
+		root.skipped[n.depth]++
 		return
 	}
 
@@ -251,6 +261,8 @@ func BuildOctreeFromObj(obj Obj, maxDepth int) *OctreeNode {
 	if len(obj.Vertices) == 0 {
 		root := NewOctreeNode(0, 0, 0, 0, maxDepth, 1, nil)
 		root.root = root
+		root.created = make([]int, maxDepth+1)
+		root.skipped = make([]int, maxDepth+1)
 		return root
 	}
 
@@ -294,6 +306,8 @@ func BuildOctreeFromObj(obj Obj, maxDepth int) *OctreeNode {
 
 	root := NewOctreeNode(center.X, center.Y, center.Z, 0, maxDepth, size, nil)
 	root.root = root
+	root.created = make([]int, maxDepth+1)
+	root.skipped = make([]int, maxDepth+1)
 
 	for _, f := range obj.Faces {
 		i0 := f[0] - 1

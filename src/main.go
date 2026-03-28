@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 )
 
 func main() {
@@ -13,10 +14,11 @@ func main() {
 	fmt.Print("Enter depth: ")
 	maxDepth := 5
 	_, _ = fmt.Scanln(&maxDepth)
+	now := time.Now()
 
 	obj := readObjFile(path)
-	fmt.Printf("Loaded %d vertices\n", len(obj.Vertices))
-	fmt.Printf("Loaded %d faces\n", len(obj.Faces))
+	fmt.Printf("Loaded Vertices: %d\n", len(obj.Vertices))
+	fmt.Printf("Loaded Faces: %d\n", len(obj.Faces))
 
 	octree := BuildOctreeFromObj(obj, maxDepth)
 	outputPath := path[:len(path)-len(filepath.Ext(path))] + "_res.obj"
@@ -25,8 +27,20 @@ func main() {
 		fmt.Printf("Failed to write result: %v\n", err)
 		return
 	}
+
 	fmt.Printf("Voxels: %d\n", stats.Voxels)
 	fmt.Printf("Vertices: %d\n", stats.Vertices)
 	fmt.Printf("Faces: %d\n", stats.Faces)
+	fmt.Println("Node Created:")
+	for depth := 0; depth <= maxDepth; depth++ {
+		fmt.Printf("%d : %d\n", depth, octree.created[depth])
+	}
+	fmt.Println("Node Skipped:")
+	for depth := 0; depth <= maxDepth; depth++ {
+		fmt.Printf("%d : %d\n", depth, octree.skipped[depth])
+	}
+	fmt.Printf("Depth: %d\n", maxDepth)
+
 	fmt.Printf("Result written to: %s\n", outputPath)
+	fmt.Printf("Time: %v\n", time.Since(now))
 }
