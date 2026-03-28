@@ -28,7 +28,7 @@ type OctreeNode struct {
 	created []int
 	skipped []int
 
-	mu       sync.Mutex
+	mu        sync.Mutex
 	splitOnce sync.Once
 }
 
